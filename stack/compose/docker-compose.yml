@@ -129,7 +129,7 @@ services:
 
   alloy:
     <<: *defaults
-    image: grafana/alloy:v1.20.0
+    image: grafana/alloy:v1.20.1
     user: "0:0"   # Docker's log files belong to root; read-only mount + no capabilities limits the risk
     command:
       - run
