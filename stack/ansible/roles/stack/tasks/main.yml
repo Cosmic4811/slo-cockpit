@@ -1,0 +1,135 @@
+- name: Create the stack folders
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ stack_dir }}"
+    - "{{ stack_dir }}/compose"
+
+- name: Remember whether the stack was already running (then changed configs need a restart)
+  ansible.builtin.command: docker compose ps --quiet
+  args:
+    chdir: "{{ stack_dir }}/compose"
+  register: stack_running_before
+  changed_when: false
+  failed_when: false
+
+# ---------------------------------------------------------------- files
+- name: Copy the demo app source
+  ansible.builtin.copy:
+    src: "{{ bundle_dir }}/demo-app"
+    dest: "{{ stack_dir }}/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+
+- name: Copy the compose file
+  ansible.builtin.copy:
+    src: "{{ bundle_dir }}/compose/docker-compose.yml"
+    dest: "{{ stack_dir }}/compose/docker-compose.yml"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Copy each service's configuration
+  ansible.builtin.copy:
+    src: "{{ bundle_dir }}/compose/{{ item.folder }}"
+    dest: "{{ stack_dir }}/compose/"
+    owner: root
+    group: root
+    mode: "0644"
+    directory_mode: "0755"
+  loop:
+    - { folder: prometheus, service: prometheus }
+    - { folder: alertmanager, service: alertmanager }
+    - { folder: blackbox, service: blackbox }
+    - { folder: loki, service: loki }
+    - { folder: alloy, service: alloy }
+    - { folder: grafana, service: grafana }
+  register: stack_config_copy
+
+- name: Write the Alertmanager config (routes alerts to the SNS e-mail topic)
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: "{{ stack_dir }}/compose/alertmanager/alertmanager.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: stack_alertmanager_config
+
+- name: Tell Docker Compose which Alertmanager config to use
+  ansible.builtin.copy:
+    dest: "{{ stack_dir }}/compose/.env"
+    content: |
+      ALERTMANAGER_CONFIG_FILE=alertmanager.yml
+    owner: root
+    group: root
+    mode: "0644"
+
+# ---------------------------------------------------------------- secrets
+- name: Create the secrets folder (root only)
+  ansible.builtin.file:
+    path: "{{ stack_dir }}/compose/secrets"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Read the secrets from SSM Parameter Store
+  ansible.builtin.command:
+    argv: [/snap/bin/aws, ssm, get-parameter, --region, "{{ aws_region }}", --name, "{{ item.parameter }}",
+           --with-decryption, --query, Parameter.Value, --output, text]
+  loop:
+    - { parameter: "{{ grafana_password_parameter }}", file: grafana_admin_password, uid: "{{ grafana_uid }}", service: grafana }
+    - { parameter: "{{ admin_token_parameter }}", file: shop_api_admin_token, uid: "{{ shop_api_uid }}", service: shop-api }
+  register: stack_secret_values
+  changed_when: false
+  no_log: true   # never print secrets in the logs
+
+- name: Write each secret, readable only by the one container user that needs it
+  ansible.builtin.copy:
+    content: "{{ item.stdout }}"
+    dest: "{{ stack_dir }}/compose/secrets/{{ item.item.file }}"
+    owner: "{{ item.item.uid }}"
+    group: "{{ item.item.uid }}"
+    mode: "0400"
+  loop: "{{ stack_secret_values.results }}"
+  register: stack_secret_files
+  no_log: true
+
+# ---------------------------------------------------------------- start
+- name: Build the demo app, download images and start everything (waits until healthy)
+  ansible.builtin.command: docker compose up --detach --build --remove-orphans --wait --wait-timeout 600
+  args:
+    chdir: "{{ stack_dir }}/compose"
+  register: stack_compose_up
+  changed_when: stack_compose_up.stderr is search('Created|Recreated|Started|Removed')
+
+- name: Restart services whose configuration changed (only when the stack was already running)
+  ansible.builtin.command: docker compose restart {{ services | join(' ') }}
+  args:
+    chdir: "{{ stack_dir }}/compose"
+  vars:
+    services: >-
+      {{ ((stack_config_copy.results | selectattr('changed') | map(attribute='item.service') | list)
+          + (['alertmanager'] if stack_alertmanager_config is changed else [])
+          + (stack_secret_files.results | selectattr('changed') | map(attribute='item.item.service') | list))
+         | unique }}
+  when: stack_running_before.stdout | length > 0 and services | length > 0
+  changed_when: true
+
+- name: Check that Grafana answers
+  ansible.builtin.uri:
+    url: http://127.0.0.1:3000/api/health
+  register: stack_grafana_health
+  until: stack_grafana_health.status == 200
+  retries: 30
+  delay: 10
+
+- name: Done
+  ansible.builtin.debug:
+    msg: "The SLO cockpit is running. Open it with: python scripts/tunnel.py (on your computer)"

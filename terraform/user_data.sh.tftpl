@@ -1,0 +1,37 @@
+#!/bin/bash
+# First-boot script: rendered by Terraform, run ONCE by cloud-init as root.
+# Everything it prints is saved in /var/log/slo-bootstrap.log on the server.
+set -euo pipefail
+exec > >(tee -a /var/log/slo-bootstrap.log) 2>&1
+echo "[bootstrap] $(date -u +%FT%TZ) starting"
+
+# 1. Settings from Terraform. No secrets here: user data is visible to anyone
+#    allowed to describe the instance, so passwords come from SSM Parameter Store.
+install -d -m 0755 /etc/slo-cockpit
+cat > /etc/slo-cockpit/deploy.env <<'EOF'
+AWS_REGION=${aws_region}
+BUNDLE_BUCKET=${bundle_bucket}
+BUNDLE_KEY=${bundle_key}
+BUNDLE_SHA256=${bundle_sha256}
+EOF
+cat > /etc/slo-cockpit/vars.json <<'EOF'
+${ansible_vars_json}
+EOF
+chmod 0600 /etc/slo-cockpit/deploy.env /etc/slo-cockpit/vars.json
+
+# 2. The deploy command: download the bundle, verify it, run Ansible.
+#    You can re-run it any time with:  sudo slo-deploy
+echo '${deploy_script_b64}' | base64 -d > /usr/local/sbin/slo-deploy
+chmod 0755 /usr/local/sbin/slo-deploy
+
+# 3. Tools needed to run Ansible on this machine.
+export DEBIAN_FRONTEND=noninteractive
+apt_get() { apt-get -q -o DPkg::Lock::Timeout=600 -o Acquire::Retries=5 "$@"; }
+apt_get update
+apt_get install -y ansible-core unzip
+snap wait system seed.loaded
+snap list aws-cli >/dev/null 2>&1 || snap install aws-cli --classic
+
+# 4. Deploy the stack.
+/usr/local/sbin/slo-deploy
+echo "[bootstrap] $(date -u +%FT%TZ) finished"

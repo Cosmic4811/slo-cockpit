@@ -1,0 +1,25 @@
+# --- Terraform: state files describe your real AWS resources - never commit them
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+# your settings (contain your e-mail address); the .example file IS committed
+*.tfvars
+!*.tfvars.example
+terraform/.build/
+
+# --- local-only files created by scripts/local_setup.py
+stack/compose/secrets/
+stack/compose/.env
+stack/compose/alertmanager/alertmanager.yml
+
+# --- Python
+__pycache__/
+*.pyc
+.venv/

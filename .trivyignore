@@ -1,0 +1,20 @@
+# Accepted findings from the Trivy security scan, each with the reason.
+# Anything NOT listed here fails the CI build.
+
+# Egress to 0.0.0.0/0 (ports 443 and 80 only): the server must reach AWS APIs, container
+# registries and Ubuntu mirrors, whose IPs change. Inbound is fully closed. VPC endpoints
+# would cost about $7/month each.
+AWS-0104
+
+# S3 bucket and SNS topic use AWS-managed encryption keys instead of customer-managed KMS
+# keys ($1/month each). Data is still encrypted at rest; fine for a demo project.
+AWS-0132
+AWS-0136
+
+# The bucket only holds a rebuildable bundle whose name is its own SHA-256,
+# so versioning and access logging add cost without value.
+AWS-0089
+AWS-0090
+
+# The health check is defined in docker-compose.yml, because this image also runs the load generator.
+DS-0026

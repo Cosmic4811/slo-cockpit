@@ -1,0 +1,12 @@
+# Load every dashboard JSON file from /etc/grafana/dashboards (dashboards as code).
+apiVersion: 1
+
+providers:
+  - name: slo-cockpit
+    folder: SLO Cockpit
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false     # change dashboards in Git, not by clicking - the files are the truth
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/dashboards

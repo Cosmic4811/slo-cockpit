@@ -1,0 +1,30 @@
+# Configures the SLO cockpit server. Runs ON the server itself (connection: local),
+# started by /usr/local/sbin/slo-deploy at first boot. Safe to run again (idempotent).
+- name: Configure the SLO cockpit server
+  hosts: localhost
+  connection: local
+  gather_facts: true
+
+  vars:
+    stack_dir: /opt/slo-cockpit
+    swap_file: /swapfile
+    alertmanager_ip: 10.200.0.10   # must match stack/compose/docker-compose.yml
+    grafana_uid: 472               # user IDs inside the containers that read the secret files
+    shop_api_uid: 10001
+
+  pre_tasks:
+    - name: Check that slo-deploy passed in every setting from Terraform
+      ansible.builtin.assert:
+        that:
+          - bundle_dir is defined
+          - aws_region is defined
+          - sns_topic_arn is defined
+          - grafana_password_parameter is defined
+          - admin_token_parameter is defined
+          - swap_size_mb is defined
+        fail_msg: "Run this playbook through 'sudo slo-deploy', which passes the settings Terraform wrote."
+
+  roles:
+    - base     # packages, swap, kernel + journal settings
+    - docker   # Docker Engine, daemon hardening, metadata-service firewall
+    - stack    # configs, secrets, docker compose up

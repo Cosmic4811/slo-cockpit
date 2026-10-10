@@ -1,0 +1,95 @@
+# Hand-written promtool unit tests for the SLI + error-budget recording rules.
+# They prove the PromQL in slos/slos.yaml measures what we think it measures.
+# round(x, 0.001) avoids tiny floating-point differences (0.2000000000000001).
+# Run them with the command in README.md ("Run the tests").
+rule_files:
+  - ../stack/compose/prometheus/rules/slo-recording.rules.yml
+
+evaluation_interval: 30s
+
+tests:
+  - name: checkout error ratio = 5xx responses / all responses
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="shop-api", route="/api/checkout", method="POST", code="200"}'
+        values: '0+9x40'
+      - series: 'http_requests_total{job="shop-api", route="/api/checkout", method="POST", code="500"}'
+        values: '0+1x40'
+    promql_expr_test:
+      - expr: round(slo:sli_error:ratio_rate5m{slo="checkout-availability"}, 0.001)
+        eval_time: 10m
+        exp_samples:
+          - labels: '{service="shop-api", slo="checkout-availability"}'
+            value: 0.1
+
+  - name: no error series yet means 0% errors, not "no data"
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="shop-api", route="/api/checkout", method="POST", code="200"}'
+        values: '0+10x40'
+    promql_expr_test:
+      - expr: slo:sli_error:ratio_rate5m{slo="checkout-availability"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:sli_error:ratio_rate5m{service="shop-api", slo="checkout-availability"}'
+            value: 0
+
+  - name: no traffic means "no data" (never NaN, which would poison the budget)
+    interval: 30s
+    input_series:
+      - series: 'http_requests_total{job="shop-api", route="/api/checkout", method="POST", code="200"}'
+        values: '5x40'
+    promql_expr_test:
+      - expr: slo:sli_error:ratio_rate5m{slo="checkout-availability"}
+        eval_time: 10m
+        exp_samples: []
+
+  - name: latency SLI = share of API requests slower than 300 ms
+    interval: 30s
+    input_series:
+      - series: 'http_request_duration_seconds_count{job="shop-api", route="/api/items", method="GET"}'
+        values: '0+10x40'
+      - series: 'http_request_duration_seconds_bucket{job="shop-api", route="/api/items", method="GET", le="0.3"}'
+        values: '0+8x40'
+    promql_expr_test:
+      - expr: round(slo:sli_error:ratio_rate5m{slo="api-latency"}, 0.001)
+        eval_time: 10m
+        exp_samples:
+          - labels: '{service="shop-api", slo="api-latency"}'
+            value: 0.2
+
+  - name: synthetic SLI - 1 failed probe out of 20 in 5 minutes = 5%
+    interval: 15s
+    input_series:
+      - series: 'probe_success{job="blackbox-http", service="shop-api", instance="http://shop-api:8080/api/items"}'
+        values: '1x40 0 1x40'
+    promql_expr_test:
+      - expr: round(slo:sli_error:ratio_rate5m{slo="synthetic-availability"}, 0.001)
+        eval_time: 12m
+        exp_samples:
+          - labels: '{service="shop-api", slo="synthetic-availability"}'
+            value: 0.05
+
+  - name: a 10-minute total checkout outage uses about 10 of the 216 "bad minutes"
+    interval: 30s
+    input_series:
+      # 30 min healthy, 10 min every request fails, 20 min healthy again
+      - series: 'http_requests_total{job="shop-api", route="/api/checkout", method="POST", code="200"}'
+        values: '0+10x60 600x19 610+10x39'
+      - series: 'http_requests_total{job="shop-api", route="/api/checkout", method="POST", code="503"}'
+        values: '0x60 10+10x19 200x39'
+    promql_expr_test:
+      - expr: >-
+          (slo:error_budget_consumed:minutes{slo="checkout-availability"} > bool 9.5)
+          * (slo:error_budget_consumed:minutes{slo="checkout-availability"} < bool 10.5)
+        eval_time: 60m
+        exp_samples:
+          - labels: '{service="shop-api", slo="checkout-availability"}'
+            value: 1
+      - expr: >-
+          (slo:error_budget_remaining:ratio{slo="checkout-availability"} > bool 0.95)
+          * (slo:error_budget_remaining:ratio{slo="checkout-availability"} < bool 0.96)
+        eval_time: 60m
+        exp_samples:
+          - labels: '{service="shop-api", slo="checkout-availability"}'
+            value: 1

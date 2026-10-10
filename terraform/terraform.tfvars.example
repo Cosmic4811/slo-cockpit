@@ -1,0 +1,13 @@
+# Copy this file to "terraform.tfvars" and fill in your values.
+# terraform.tfvars is listed in .gitignore, so your e-mail address stays out of Git.
+
+alert_email = "you@example.com"
+
+# Optional: pick the AWS region closest to you (default: us-east-1).
+# aws_region = "ap-south-1"
+
+# Optional: the AWS CLI profile Terraform should use (default: "slo").
+# aws_profile = "slo"
+
+# Optional: t3.micro (default, 1 GB RAM), t4g.micro (ARM, cheaper) or t3.small (2 GB, more headroom).
+# instance_type = "t3.micro"

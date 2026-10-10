@@ -1,0 +1,102 @@
+# Checks every push and pull request. Needs no AWS account and no secrets.
+name: validate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  PROMETHEUS_IMAGE: quay.io/prometheus/prometheus:v3.15.0
+  ALERTMANAGER_IMAGE: quay.io/prometheus/alertmanager:v0.34.1
+
+jobs:
+  observability:
+    name: SLO rules, alert tests, configs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Install tools
+        run: python -m pip install -r tools/requirements.txt ansible-core ansible-lint
+
+      - name: Generated rules and dashboards match slos.yaml and tools/dashboards.py
+        run: |
+          python tools/slo_generator.py --check
+          python tools/dashboards.py --check
+
+      - name: Prometheus config and rules (promtool check)
+        run: |
+          docker run --rm -v "$PWD/stack/compose/prometheus:/etc/prometheus:ro" \
+            --entrypoint promtool "$PROMETHEUS_IMAGE" check config /etc/prometheus/prometheus.yml
+
+      - name: Alert unit tests (promtool test)
+        run: |
+          docker run --rm -v "$PWD:/work:ro" -w /work --entrypoint promtool "$PROMETHEUS_IMAGE" \
+            test rules tests/slo-alerts.test.yml tests/sli-recording.test.yml
+
+      - name: Alertmanager configs (local + the AWS template with sample values)
+        run: |
+          mkdir -p /tmp/am/templates
+          cp stack/compose/alertmanager/templates/*.tmpl /tmp/am/templates/
+          cp stack/compose/alertmanager/alertmanager.local.yml /tmp/am/
+          sed -e 's|{{ sns_topic_arn }}|arn:aws:sns:us-east-1:123456789012:ci|' \
+              -e 's|{{ aws_region }}|us-east-1|' \
+              stack/ansible/roles/stack/templates/alertmanager.yml.j2 > /tmp/am/alertmanager.yml
+          for f in alertmanager.local.yml alertmanager.yml; do
+            docker run --rm -v /tmp/am:/etc/alertmanager:ro --entrypoint amtool "$ALERTMANAGER_IMAGE" \
+              check-config "/etc/alertmanager/$f"
+          done
+
+      - name: Loki and Alloy configs
+        run: |
+          docker run --rm -v "$PWD/stack/compose/loki:/etc/loki:ro" grafana/loki:3.7.8 \
+            -config.file=/etc/loki/loki.yml -verify-config
+          docker run --rm -v "$PWD/stack/compose/alloy:/etc/alloy:ro" grafana/alloy:v1.20.0 \
+            validate /etc/alloy/config.alloy
+
+      - name: Docker Compose file
+        run: |
+          mkdir -p stack/compose/secrets
+          touch stack/compose/secrets/grafana_admin_password stack/compose/secrets/shop_api_admin_token
+          docker compose -f stack/compose/docker-compose.yml config --quiet
+
+      - name: Ansible playbook syntax + lint (production profile)
+        working-directory: stack/ansible
+        run: |
+          ansible-playbook --syntax-check site.yml
+          ansible-lint --offline site.yml roles/
+
+      - name: Shell scripts (shellcheck)
+        run: shellcheck terraform/files/slo-deploy.sh
+
+      - name: Security scan (Trivy) - accepted findings are listed in .trivyignore
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src aquasec/trivy:0.74.0 config \
+            --exit-code 1 --severity LOW,MEDIUM,HIGH,CRITICAL --ignorefile .trivyignore .
+
+  terraform:
+    name: Terraform format, validate, tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: "1.16.4"
+
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+      - name: Terraform tests (fake AWS provider - no account needed)
+        run: terraform test

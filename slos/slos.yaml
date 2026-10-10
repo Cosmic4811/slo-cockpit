@@ -1,0 +1,51 @@
+# SLO definitions: the single source of truth for SLO-as-code.
+#
+# After editing this file, regenerate the Prometheus rules and tests:
+#     python tools/slo_generator.py
+#
+# How each SLO is measured (the SLI) is given as PromQL:
+#   events:  error_query / total_query  (both must return ONE series, so wrap them in sum(...))
+#   raw:     error_ratio_query          (already a 0..1 ratio, also ONE series)
+# Write {{window}} where the time window goes; the generator fills in 5m, 1h, 3d, ...
+
+defaults:
+  period: 30d            # error-budget period: 28d or 30d
+  # Where the runbooks live (shown in every alert e-mail). Put your GitHub username in the URL.
+  runbook_base_url: https://github.com/Cosmic4811/slo-cockpit/blob/main/docs/runbooks
+  # Grafana is reached through the SSM tunnel, so this is a localhost link.
+  dashboard_url: http://localhost:3000/d/slo-cockpit/slo-cockpit
+
+slos:
+  - name: checkout-availability
+    service: shop-api
+    description: Checkout requests that do not fail with a server error (5xx).
+    objective: 99.5      # percent -> error budget 0.5% (216 bad minutes per 30 days)
+    sli:
+      events:
+        error_query: >-
+          sum(rate(http_requests_total{job="shop-api", route="/api/checkout", code=~"5.."}[{{window}}]))
+        total_query: >-
+          sum(rate(http_requests_total{job="shop-api", route="/api/checkout"}[{{window}}]))
+
+  - name: api-latency
+    service: shop-api
+    description: API requests answered in under 300 ms.
+    objective: 99.0
+    sli:
+      events:
+        # slow requests = all requests - requests in the "<= 0.3 seconds" histogram bucket
+        error_query: >-
+          sum(rate(http_request_duration_seconds_count{job="shop-api", route=~"/api/.+"}[{{window}}]))
+          -
+          sum(rate(http_request_duration_seconds_bucket{job="shop-api", route=~"/api/.+", le="0.3"}[{{window}}]))
+        total_query: >-
+          sum(rate(http_request_duration_seconds_count{job="shop-api", route=~"/api/.+"}[{{window}}]))
+
+  - name: synthetic-availability
+    service: shop-api
+    description: Black-box probes of GET /api/items (from blackbox_exporter) that succeed.
+    objective: 99.9
+    sli:
+      raw:
+        error_ratio_query: >-
+          1 - avg(avg_over_time(probe_success{job="blackbox-http", service="shop-api"}[{{window}}]))

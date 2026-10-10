@@ -1,0 +1,67 @@
+// Grafana Alloy: ships every container's logs to Loki.
+// (Alloy replaces Promtail, which reached end-of-life in March 2026.)
+//
+// Security: we read Docker's log files through a read-only mount instead of
+// mounting the Docker socket, which would give this container control of the host.
+
+// Alloy's own logs: warnings and errors only (keeps Loki small).
+logging {
+  level = "warn"
+}
+
+// 1. Find the log file of every container.
+local.file_match "containers" {
+  path_targets = [{"__path__" = "/var/lib/docker/containers/*/*-json.log"}]
+  sync_period  = "10s"
+}
+
+// 2. Tail those files.
+loki.source.file "containers" {
+  targets    = local.file_match.containers.targets
+  forward_to = [loki.process.containers.receiver]
+}
+
+// 3. Unwrap Docker's JSON envelope:
+//    {"log":"<the app's line>","stream":"stdout","attrs":{"com.docker.compose.service":"shop-api"},"time":"..."}
+loki.process "containers" {
+  stage.json {
+    expressions = {
+      output  = "log",
+      stream  = "stream",
+      time    = "time",
+      service = "attrs.\"com.docker.compose.service\"",
+    }
+  }
+
+  stage.timestamp {
+    source = "time"
+    format = "RFC3339Nano"
+  }
+
+  // Only low-cardinality labels: a handful of services x 2 streams.
+  stage.labels {
+    values = {
+      service = "",
+      stream  = "",
+    }
+  }
+
+  // The file path contains the container ID, which changes on every deploy:
+  // as a label it would create a new log stream each time (cardinality!).
+  stage.label_drop {
+    values = ["filename"]
+  }
+
+  stage.output {
+    source = "output"
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+// 4. Send to Loki.
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

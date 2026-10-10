@@ -1,0 +1,57 @@
+# Infrastructure alerts (hand-written).
+# These watch *causes*, so they only open tickets. Pages are reserved for SLO
+# burn-rate alerts, which watch *symptoms* that users actually feel.
+groups:
+  - name: infrastructure
+    rules:
+      - alert: TargetDown
+        expr: up == 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus has not been able to scrape {{ $labels.job }} ({{ $labels.instance }}) for 5 minutes."
+          runbook_url: https://github.com/Cosmic4811/slo-cockpit/blob/main/docs/runbooks/infrastructure.md#targetdown
+
+      - alert: HostMemoryPressure
+        expr: |
+          node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 0.10
+          and
+          (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes) > 0.50
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The server is short of memory"
+          description: "Less than 10% RAM is available and more than half of the swap is in use."
+          runbook_url: https://github.com/Cosmic4811/slo-cockpit/blob/main/docs/runbooks/infrastructure.md#hostmemorypressure
+
+      - alert: HostDiskFillingUp
+        expr: node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.15
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The server disk is more than 85% full"
+          description: "Only {{ $value | humanizePercentage }} of the root disk is free."
+          runbook_url: https://github.com/Cosmic4811/slo-cockpit/blob/main/docs/runbooks/infrastructure.md#hostdiskfillingup
+
+      - alert: AlertDeliveryFailing
+        expr: increase(alertmanager_notifications_failed_total[15m]) > 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Alertmanager cannot deliver {{ $labels.integration }} notifications"
+          description: "Alert e-mails are failing, so this alert may not reach you either. Check it in Grafana or at http://localhost:9093."
+          runbook_url: https://github.com/Cosmic4811/slo-cockpit/blob/main/docs/runbooks/infrastructure.md#alertdeliveryfailing
+
+      - alert: PrometheusRuleFailures
+        expr: increase(prometheus_rule_evaluation_failures_total[15m]) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Some Prometheus rules fail to evaluate"
+          description: "Rule group {{ $labels.rule_group }} has evaluation failures, so some SLO numbers may be missing."
+          runbook_url: https://github.com/Cosmic4811/slo-cockpit/blob/main/docs/runbooks/infrastructure.md#prometheusrulefailures

@@ -1,0 +1,117 @@
+# Docker Engine from Docker's official repository (same steps as docs.docker.com, as code).
+- name: Create the apt keyrings folder
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+
+- name: Download Docker's package signing key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+
+- name: Add Docker's package repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/docker.sources
+    content: |
+      Types: deb
+      URIs: https://download.docker.com/linux/ubuntu
+      Suites: {{ ansible_facts['distribution_release'] }}
+      Components: stable
+      Architectures: {{ 'arm64' if ansible_facts['architecture'] == 'aarch64' else 'amd64' }}
+      Signed-By: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+
+# Written before installing, so Docker starts with these settings the very first time.
+- name: Create the Docker config folder
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    mode: "0755"
+
+- name: Configure the Docker daemon (log rotation + safer defaults)
+  ansible.builtin.copy:
+    dest: /etc/docker/daemon.json
+    content: |
+      {
+        "log-driver": "json-file",
+        "log-opts": { "max-size": "10m", "max-file": "3" },
+        "live-restore": true,
+        "no-new-privileges": true
+      }
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+
+- name: Install Docker Engine and the Compose plugin
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+    state: present
+    update_cache: true
+    lock_timeout: 600
+
+- name: Start Docker now and at every boot
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+# ---------------------------------------------------------------- metadata-service firewall
+# Containers could otherwise ask the EC2 metadata service for the server's AWS credentials
+# (a classic cloud attack). Only Alertmanager needs them (to send e-mail through SNS),
+# so the host firewall lets only Alertmanager's fixed IP through.
+- name: Install the metadata-service firewall script
+  ansible.builtin.copy:
+    dest: /usr/local/sbin/imds-guard
+    content: |
+      #!/bin/sh
+      # Block containers from the EC2 metadata service, except Alertmanager ({{ alertmanager_ip }}).
+      set -eu
+      IMDS=169.254.169.254/32
+      ALLOWED={{ alertmanager_ip }}/32
+      iptables -N DOCKER-USER 2>/dev/null || true
+      # remove our old rules (if any), then insert them at the top in the right order
+      while iptables -D DOCKER-USER -s "$ALLOWED" -d "$IMDS" -j RETURN 2>/dev/null; do :; done
+      while iptables -D DOCKER-USER -d "$IMDS" -j DROP 2>/dev/null; do :; done
+      iptables -I DOCKER-USER 1 -d "$IMDS" -j DROP
+      iptables -I DOCKER-USER 1 -s "$ALLOWED" -d "$IMDS" -j RETURN
+    owner: root
+    group: root
+    mode: "0755"
+  notify: Restart IMDS guard
+
+- name: Run the firewall script whenever Docker starts
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/imds-guard.service
+    content: |
+      [Unit]
+      Description=Block container access to the EC2 metadata service (except Alertmanager)
+      After=docker.service
+      Requires=docker.service
+      PartOf=docker.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/imds-guard
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart IMDS guard
+
+- name: Enable the metadata-service firewall
+  ansible.builtin.systemd_service:
+    name: imds-guard
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply Docker changes before starting the stack
+  ansible.builtin.meta: flush_handlers

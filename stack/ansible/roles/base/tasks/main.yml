@@ -1,0 +1,64 @@
+- name: Install basic tools
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, jq, unzip]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    lock_timeout: 600
+
+# ---------------------------------------------------------------- swap (1 GB of RAM is tight)
+- name: Create and format the swap file (only if it does not exist yet)
+  ansible.builtin.shell: |
+    set -e
+    fallocate -l {{ swap_size_mb }}M {{ swap_file }}
+    chmod 0600 {{ swap_file }}
+    mkswap {{ swap_file }}
+  args:
+    creates: "{{ swap_file }}"
+    executable: /bin/bash
+  when: swap_size_mb | int > 0
+
+- name: Turn swap on at every boot
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    line: "{{ swap_file }} none swap sw 0 0"
+  when: swap_size_mb | int > 0
+
+- name: Check which swap is active
+  ansible.builtin.command: swapon --show=NAME --noheadings
+  register: base_active_swap
+  changed_when: false
+
+- name: Turn swap on now
+  ansible.builtin.command: swapon {{ swap_file }}
+  when: swap_size_mb | int > 0 and swap_file not in base_active_swap.stdout
+  changed_when: true
+
+- name: Prefer RAM and use swap only under pressure
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/60-slo-cockpit.conf
+    content: |
+      vm.swappiness = 10
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Apply kernel settings
+  when: swap_size_mb | int > 0
+
+# ---------------------------------------------------------------- keep the small disk from filling up
+- name: Create the journald drop-in folder
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+
+- name: Limit the system journal to 200 MB
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/60-slo-cockpit.conf
+    content: |
+      [Journal]
+      SystemMaxUse=200M
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald

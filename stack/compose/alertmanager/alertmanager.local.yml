@@ -1,0 +1,26 @@
+# Alertmanager config for running LOCALLY (Docker Desktop).
+# Alerts appear in the UI (http://localhost:9093) but are not sent anywhere.
+# On AWS, Ansible writes alertmanager.yml instead: same routing, plus e-mail through Amazon SNS.
+templates:
+  - /etc/alertmanager/templates/*.tmpl
+
+route:
+  receiver: ui-only
+  group_by: [alertname, slo, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="page"']
+      repeat_interval: 1h
+    - matchers: ['severity="ticket"']
+      repeat_interval: 12h
+
+receivers:
+  - name: ui-only
+
+inhibit_rules:
+  # While an SLO is paging, don't also send the (slower) ticket for the same SLO.
+  - source_matchers: ['severity="page"']
+    target_matchers: ['severity="ticket"']
+    equal: [slo]

@@ -1,0 +1,7 @@
+# Always store and check out text files with Linux line endings (LF).
+# Shell scripts with Windows line endings (CRLF) break on the Linux server.
+* text=auto eol=lf
+*.png binary
+*.gif binary
+*.jpg binary
+*.mp4 binary

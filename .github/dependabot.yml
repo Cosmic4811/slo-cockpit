@@ -1,0 +1,28 @@
+# Dependabot opens pull requests when new versions of what we pin are released,
+# so security fixes don't depend on remembering to check.
+version: 2
+updates:
+  - package-ecosystem: docker-compose
+    directory: /stack/compose
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /stack/demo-app
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /stack/demo-app
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /tools
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directory: /terraform
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

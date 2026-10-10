@@ -1,0 +1,29 @@
+{{/* Alert e-mail templates. They replace Alertmanager's built-in SNS subject and message.
+     SNS rule: the subject must be one line of at most 100 characters. Ours stays under 80
+     because SLO names are limited to 40 characters by tools/slo_generator.py. */}}
+
+{{ define "sns.default.subject" -}}
+[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .CommonLabels.alertname }}{{ with .CommonLabels.slo }} {{ . }}{{ end }}
+{{- end }}
+
+{{ define "sns.default.message" -}}
+{{ range .Alerts -}}
+{{ .Status | toUpper }}: {{ .Annotations.summary }}
+Severity:  {{ .Labels.severity }}
+{{- with .Labels.service }}
+Service:   {{ . }}{{ end }}
+{{- with .Labels.slo }}
+SLO:       {{ . }}{{ end }}
+Started:   {{ .StartsAt.Format "2006-01-02 15:04 MST" }}
+{{- if eq .Status "resolved" }}
+Resolved:  {{ .EndsAt.Format "2006-01-02 15:04 MST" }}{{ end }}
+
+{{ .Annotations.description }}
+
+Runbook:   {{ .Annotations.runbook_url }}
+{{- with .Annotations.dashboard_url }}
+Dashboard: {{ . }}
+           (start the tunnel first: python scripts/tunnel.py){{ end }}
+------------------------------------------------------------
+{{ end -}}
+{{- end }}
