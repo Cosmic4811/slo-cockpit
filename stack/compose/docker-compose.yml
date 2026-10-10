@@ -101,7 +101,7 @@ services:
 
   blackbox:
     <<: *defaults
-    image: quay.io/prometheus/blackbox-exporter:v0.28.0
+    image: quay.io/prometheus/blackbox-exporter:v0.29.0
     user: "65534:65534"   # the image defaults to root; "nobody" is enough
     command: ["--config.file=/etc/blackbox/blackbox.yml"]
     volumes:
