@@ -6,7 +6,7 @@ ch. 5), with a live error-budget dashboard, e-mail paging through Amazon SNS, an
 injector that burns error budget on demand. One `terraform apply` builds everything in about
 5 minutes; `terraform destroy` removes it.
 
-> Demo video: *(add your recording here)*
+> Demo video: (https://github.com/user-attachments/assets/22b0afd2-a320-4187-90bd-d8e471625825)
 
 ## What it demonstrates
 
