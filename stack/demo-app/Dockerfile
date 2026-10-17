@@ -1,6 +1,6 @@
 # shop-api demo service (the same image also runs the load generator).
 # Pulled from AWS's public mirror of Docker Hub's official images: no Docker Hub pull limits.
-FROM public.ecr.aws/docker/library/python:3.14.7-slim
+FROM public.ecr.aws/docker/library/python:3.15.0-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
